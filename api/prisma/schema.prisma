@@ -1,0 +1,150 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  locale       String   @default("en")
+  credits      Int      @default(20)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  projects       Project[]
+  payments       Payment[]
+  aiTransactions AITransaction[]
+
+  // NEW:
+  refreshTokens  RefreshToken[]
+}
+
+
+model Project {
+  id              String   @id @default(uuid())
+  userId          String
+  title           String
+  language        String
+  templateId      String?
+  dataJson        Json?
+  isPaid          Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  parentProjectId String?
+
+  // Relations
+  user     User             @relation(fields: [userId], references: [id])
+  versions ProjectVersion[]
+  files    File[]
+  payments Payment[]
+}
+
+model ProjectVersion {
+  id        String   @id @default(uuid())
+  projectId String
+  version   Int
+  dataJson  Json?
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id])
+}
+
+model File {
+  id           String   @id @default(uuid())
+  projectId    String
+  type         String // "pdf" | "docx" | "image"
+  s3Key        String
+  metadataJson Json?
+  createdAt    DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id])
+}
+
+/// Payments and billing
+model Payment {
+  id         String   @id @default(uuid())
+  userId     String
+  projectId  String?
+  amount     Int // stored in smallest currency unit (e.g., cents or millimes)
+  currency   String   @default("TND")
+  gateway    String // "stripe", "local_gateway", ...
+  gatewayRef String? // id from gateway
+  status     String   @default("pending") // pending, succeeded, failed, refunded
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  user    User?    @relation(fields: [userId], references: [id])
+  project Project? @relation(fields: [projectId], references: [id])
+}
+
+/// AI credits / transactions log
+model AITransaction {
+  id         String   @id @default(uuid())
+  userId     String
+  type       String // "generate_text","enhance_text","generate_image","enhance_image","translate"
+  cost       Int // credits cost
+  promptHash String? // hash of prompt for caching/audit
+  resultUrl  String? // optional URL to stored result (s3)
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+/// Templates (CV templates)
+model Template {
+  id        String   @id @default(uuid())
+  name      String
+  category  String? // e.g., "one-column","two-column","creative"
+  thumbnail String? // s3 key or url
+  html      String? // optional stored HTML template
+  css       String? // optional stored CSS
+  meta      Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/// Lookup: Countries
+model Country {
+  id      String  @id @default(uuid())
+  code    String  @unique // ISO code e.g., "TN", "US"
+  nameEn  String
+  nameAr  String?
+  flagUrl String?
+}
+
+/// Lookup: Institutions (universities / schools)
+model Institution {
+  id      String  @id @default(uuid())
+  name    String
+  country String? // country code
+  meta    Json?
+}
+
+model RefreshToken {
+  id         Int      @id @default(autoincrement())
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  tokenHash  String
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+  revoked    Boolean  @default(false)
+  replacedBy Int?
+
+  @@index([userId])
+}
+

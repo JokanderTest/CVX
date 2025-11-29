@@ -1,0 +1,536 @@
+# CVX SAAS — README (DETAILED)
+
+**Language:** English (you asked that future conversations start in English).
+**Project:** CVX SAAS — a multilingual CV builder web SaaS (Arabic / English / French).
+This README gathers everything needed to start development from zero to production: architecture, codebase structure, stacks, services, infra, dev commands, data models, AI and file-parsing notes, payment & credits rules, localization strategy, deployment and operational guidance.
+
+> Use this file as the canonical project brief. Share it with teammates, paste into your project repo as `README.md`, and refer to it at every planning session.
+
+---
+
+# Table of Contents
+
+1. Project Overview
+2. Goals & MVP scope
+3. Product Features (summary)
+4. Architecture overview (high-level)
+5. Tech Stack (frontend / backend / infra / AI / file parsing)
+6. Project Structure & Repos (mono-repo recommended)
+7. Datamodel (key entities)
+8. API contract (core endpoints)
+9. Workflows: Save / Autosave / Sync / Exports / Credits
+10. Localization strategy (Arabic / English / French)
+11. AI integrations & credit system (costs & behavior)
+12. File import & parsing (docx / pdf / LinkedIn)
+13. PDF generation details (fonts, RTL)
+14. Payment & billing rules (pricing & flows)
+15. Security, privacy & compliance notes
+16. Dev environment (local stack, docker-compose)
+17. CI / CD & deployment checklist
+18. Observability & monitoring
+19. Admin tools & support flows
+20. Testing strategy
+21. Launch & post-launch roadmap
+22. Quick-start dev commands & environment variables
+23. Appendix: prompts, validation rules, UX snippets
+
+---
+
+# 1. Project Overview
+
+CVX SAAS is a web-based Resume/CV generator targeted at individual users who need professional CVs quickly and locally relevant (Tunisia & global). Core differentiators:
+
+* Multi-step CV builder (13 sections) with live preview (HTML/CSS templates).
+* AI-powered text generation (duties, summaries, cover letters) and photo enhancement.
+* Import from PDF/docx/LinkedIn (progressive enhancement).
+* Multi-language support (Arabic, English, French) with RTL support for Arabic.
+* Projects & files management, payments per generated CV and credits model for AI.
+* Admin panel and robust background processing for heavy tasks.
+
+---
+
+# 2. Goals & MVP Scope
+
+**Primary objective:** Ship a stable MVP that demonstrates core value:
+
+* Sign-up/login, create & save a CV with a live preview, export to PDF, use AI for text generation, and purchase CV files.
+* Support Arabic, English, and French languages for UI and generated CV content.
+* Basic admin tools to manage templates, payments, user support.
+
+**MVP features:**
+
+* Landing page + Auth (email/password, social optional).
+* CV Maker: core steps (Personal Info, Contact, Work Experience, Education, Summary & Objective).
+* Live preview + one or two responsive templates.
+* Save to server, autosave to local storage, server sync (on step change + periodic).
+* PDF export (server-side) and download.
+* AI: Generate / Enhance / Translate text ops (cost deduction).
+* Payment: Stripe integration for credits + file purchases.
+* My Documents page listing projects & purchased files.
+* Admin basic panel (view users, credits, payments).
+* 20 free AI credits on signup.
+
+---
+
+# 3. Product Features (summary)
+
+* Landing Page (static pages with CTA)
+* Multi-step CV Maker (13 sections: Personal Info, Contact, Work Exp, Internship, Education, Professional Dev, Volunteer, Other Sections, Languages, Computer Skills, Personal Skills, Photo, Summary & Objective)
+* Live Preview Canvas (real-time updates)
+* Template gallery with filters (color, image/no-image, 1/2 columns, region)
+* Import & parsing: docx, pdf, LinkedIn URL/export
+* AI features: Generate duties, enhance text, spell-check, translate, generate/enhance photos
+* Credits & billing: purchase credits + pay per CV / change-template fees / cover letter fees
+* My Documents & Projects management
+* Admin & support console
+* Multi-language UI and content generation (AR/EN/FR)
+
+---
+
+# 4. Architecture Overview (high-level)
+
+* **Frontend:** Next.js (React) + TypeScript — renders Landing + SPA app for CV Maker.
+* **Backend API:** Node.js + TypeScript (NestJS recommended) exposing REST/GraphQL.
+* **Database:** PostgreSQL (primary), Redis (cache, queues), S3-compatible object store (static files).
+* **Workers:** Background worker pool (BullMQ / Redis) for PDF generation, AI requests, file parsing, image processing.
+* **AI Gateway:** service orchestrating calls to LLM / image APIs, handling prompt templates and caching.
+* **File-parsing service:** (Node or Python) for docx/pdf processing, OCR for scanned documents.
+* **Auth:** JWT or NextAuth for session handling; role-based access for admin.
+* **Payment Gateway:** Stripe (PCI-compliant within their hosted flows).
+* **Monitoring & Logging:** Sentry, Prometheus/Grafana, ELK or hosted logs.
+
+---
+
+# 5. Tech Stack (detailed)
+
+**Frontend:**
+
+* Next.js (React) + TypeScript
+* Tailwind CSS + shadcn/ui (or Headless UI)
+* react-hook-form + Zod for schema validation
+* TanStack React Query for server state
+* Zustand for local state (live preview)
+* TipTap for rich text editor
+* dnd-kit (drag/drop)
+* i18n: next-intl or react-i18next
+
+**Backend:**
+
+* Node.js + TypeScript
+* NestJS or Fastify + Express patterns
+* Prisma ORM + PostgreSQL
+* Redis (caching & BullMQ)
+* BullMQ (queue)
+* AWS S3 or DigitalOcean Spaces (object storage)
+* Puppeteer / Playwright (HTML → PDF rendering)
+* Libraries: multer (file upload), sharp (image processing), passport/jwt
+
+**Optional Python microservices:**
+
+* Flask / FastAPI for heavy NLP or OCR tasks (spaCy, pdfplumber, python-docx, Tesseract)
+
+**AI & 3rd-party providers:**
+
+* OpenAI (text & translations) or alternative LLM providers
+* Replicate / Stability / GFPGAN / Real-ESRGAN for image tasks (or local models if you host GPUs)
+* Google Vision OCR / AWS Textract (optional paid, high-accuracy OCR)
+* Stripe (payments)
+* SendGrid / Mailgun / AWS SES (emails)
+
+**Infrastructure:**
+
+* Docker containers, Kubernetes (EKS/GKE) or managed platforms (Vercel for frontend, Render/Fly for backend)
+* Terraform for IaC
+* GitHub Actions for CI/CD
+
+---
+
+# 6. Project Structure & Repos
+
+Recommended mono-repo layout (pnpm / yarn workspaces):
+
+```
+/cvx/
+  /apps/
+    /web-frontend/        # Next.js app (public landing + CV builder)
+    /admin-panel/         # Admin React app (optional same Next app under /admin)
+    /api/                 # Backend (NestJS) or separate repo
+  /packages/
+    /ui/                  # Shared design system components (Tailwind, shadcn)
+    /lib/                 # Shared TypeScript types, validation schemas
+    /workers/             # Worker scripts for jobs (pdf, ai, parser)
+    /infra/               # Terraform configs
+  /scripts/
+  docker-compose.yml
+  README.md
+```
+
+---
+
+# 7. Key Data Models (entities)
+
+High-level fields (simplified). Store project content as `data_json` to allow flexible templates.
+
+**users**
+
+* id, email, password_hash, name, locale, role, created_at, credits_balance
+
+**projects**
+
+* id, user_id, title, language, template_id, data_json, is_paid, created_at, updated_at, parent_project_id
+
+**project_versions**
+
+* id, project_id, version_number, data_json, created_at
+
+**templates**
+
+* id, name, category, thumbnail_url, html_template, css, meta
+
+**files**
+
+* id, project_id, type (pdf/docx/image), s3_key, metadata_json, created_at
+
+**ai_transactions**
+
+* id, user_id, type, cost, prompt_hash, result_hash, created_at
+
+**payments**
+
+* id, user_id, project_id, amount, currency, gateway, status, created_at
+
+**institutions, countries, degrees**
+
+* lookup tables for autocompletion
+
+---
+
+# 8. Core API endpoints (examples)
+
+* `POST /api/auth/signup`
+* `POST /api/auth/login`
+* `GET /api/user/me`
+* `POST /api/projects` — create project skeleton
+* `GET /api/projects/:id`
+* `PUT /api/projects/:id` — save draft (data_json)
+* `POST /api/projects/:id/export` — request PDF generation
+* `GET /api/jobs/:id/status`
+* `POST /api/upload` — upload resume / image
+* `POST /api/ai/generate` — text generation (deduct credits)
+* `POST /api/ai/enhance` — text enhancement
+* `POST /api/payments/create-session` — Stripe session
+* `POST /api/credits/purchase` — top-up credits webhook
+
+Design each endpoint with request/response schemas and Zod validation.
+
+---
+
+# 9. Workflows & UX rules
+
+**Autosave & Sync**
+
+* Local: Save full project state to `localStorage` or `IndexedDB` frequently (every few seconds or on change).
+* Server: On first Next click of a step and periodically every 30s (or after significant change) push snapshot to server.
+* Cloud icon shows sync status (white = unsynced, green flash = synced).
+
+**Validation**
+
+* Use Zod schemas per step. Provide real-time client validation for phone/email format, date logic, and required fields.
+
+**Cloneable fields**
+
+* Add/Remove controls for repeatable arrays (phones, emails, documents). Enforce server-side limits (e.g., max 6 platforms, max 3 websites).
+
+**Save versions**
+
+* Save project snapshots as versions (project_versions) when user hits Next or Save As. Allow restore of previous versions.
+
+**Export**
+
+* Export triggers background job that renders final HTML → PDF, uploads to S3, and notifies user via websocket / polling.
+
+---
+
+# 10. Localization Strategy (AR / EN / FR)
+
+**UI Localization**
+
+* Use `next-intl` or `react-i18next`. Keep translations as keys and load per locale.
+* Provide locale fallback chain: Arabic (ar) —> English (en) —> French (fr) depending on user language preference.
+
+**RTL handling**
+
+* Use `dir="rtl"` on `html` when Arabic is selected. Use Tailwind RTL plugin or CSS adjustments for mirroring layout.
+
+**Content generation**
+
+* When generating content (AI), send target language parameter to the AI gateway.
+* Projects are language-scoped: each language version is a separate `project` linked via `parent_project_id`.
+* Translation flow: on-demand translation job that uses AI and creates a new project for the target language. Avoid auto-translating all language variants to save credits — translate on first open/action.
+
+**Date / Number formats**
+
+* Format dates and numbers according to locale (use `Intl.DateTimeFormat`).
+
+**Fonts**
+
+* Include high-quality Arabic web fonts (e.g., Noto Kufi Arabic, Cairo) embedded in PDF generation pipeline to render Arabic correctly.
+
+---
+
+# 11. AI Integrations & Credits
+
+**Credit model**
+
+* Free credits: 20 credits on signup.
+* Costs (example, adjust as needed):
+
+  * Text operations (Generate/Enhance/SpellCheck/Translate): 1 credit per request.
+  * Image operations (Generate Professional Photo / Enhance Image / Remove Background): 2 credits per request.
+* Credits stored as `ai_credits` per user. Deduct atomically on request creation.
+
+**AI Gateway responsibilities**
+
+* Accept requests from backend, compose prompt template, check cache for identical prompt (hash), deduct credits, call 3rd-party LLM, persist result & transaction record, return result to requester.
+* Implement retries/backoff, rate-limits, and cost controls.
+
+**Prompt engineering**
+
+* Standardize prompt templates to ensure consistent outputs. Log prompts and responses for audit & improvements.
+
+**Caching**
+
+* Cache repeated prompts (e.g., same job details) for a limited time to save credits.
+
+---
+
+# 12. File Import & Parsing
+
+**Accept:** PDF, DOCX, images (jpg/png). Limit file size (e.g., 10–20 MB).
+**Strategy:**
+
+* For structured DOCX: parse using `mammoth.js` (Node) or `python-docx` to extract headings & paragraphs.
+* For PDF: attempt text extraction with `pdf.js` or `pdf-parse`. For scanned PDFs, run OCR (Tesseract / Google Vision / Textract).
+* Entity extraction: Use regex rules and ML NER (spaCy) to map phrases to structured fields (job titles, dates, institutions).
+* LinkedIn: Do not scrape LinkedIn without consent or violating TOS. Prefer user-pasted export files or ask user to upload LinkedIn export. Later consider LinkedIn OAuth (restricted).
+  **Note on embedding JSON in PDFs:** unreliable cross-readers. Keep canonical JSON in DB and store original file as source.
+
+---
+
+# 13. PDF Generation (HTML → PDF)
+
+**Approach:**
+
+* Use server-side headless Chromium (Puppeteer) to render the same HTML template used in Live Preview and generate a PDF.
+* Embed fonts (Arabic fonts) and ensure CSS supports RTL rendering.
+* Test across SEO/print scenarios. Use `@page` CSS rules for margins and page breaks.
+* Ensure images and assets are accessible to the headless renderer (local or through authenticated S3 links).
+
+---
+
+# 14. Payment & Billing Rules (as requested)
+
+**Pricing rules (as specified):**
+
+* Any CV generated on site: 15 TND.
+* Discounts: Bulk discount of 5 TND per CV when multiple CVs purchased in same checkout.
+* Template-only change: 5 TND.
+* Cover letter generation: 5 TND per letter.
+* After payment: lock name/last name editing and grant 15 free edits/downloads. Each edit (any change) counts as 1. After 15 edits, user must pay to re-enable downloads or buy more edits. Server enforces counts.
+* Credits packs (example prices from earlier):
+
+  * 20 credits — 4 TND
+  * 50 credits — 7 TND
+  * 100 credits — 12 TND
+
+**Payment flow:**
+
+* Use Stripe Checkout or Payment Intents for secure payments.
+* On payment success webhook, mark project as paid, generate downloadable files, increment credits if purchase was credits pack.
+* Handle refunds and idempotency on webhooks.
+
+---
+
+# 15. Security, Privacy & Compliance
+
+**Security**
+
+* HTTPS everywhere, secure cookies, CSRF protection, input sanitization.
+* Passwords hashed with bcrypt/argon2.
+* Rate-limit expensive endpoints and AI endpoint usage.
+* Use helmet, CSP headers, and XSS protections.
+
+**Privacy**
+
+* PII stored securely; support export/delete requests (GDPR-like).
+* Keep a minimal retention policy for logs and backups.
+* Provide clear privacy policy and terms of service.
+
+**File uploads**
+
+* Virus scan uploads (ClamAV or third-party).
+* Enforce file type & size checks.
+
+---
+
+# 16. Dev Environment (local)
+
+**Recommended local services:**
+
+* PostgreSQL
+* Redis
+* MinIO (S3-compatible) or localstack
+* Docker & docker-compose
+* Node 18+ or 20
+* pnpm/yarn
+
+**Example `docker-compose.yml` services:**
+
+* postgres
+* redis
+* minio
+* backend
+* frontend
+* worker
+
+**Local workflow**
+
+1. Clone repo
+2. `pnpm install`
+3. `cp .env.example .env` (set local envs)
+4. `pnpm prisma migrate dev`
+5. `docker-compose up --build` (or start services individually)
+6. `pnpm dev` (start frontend)
+7. `pnpm start:dev` (start backend)
+8. `pnpm worker` (start worker)
+
+---
+
+# 17. CI / CD & Deployment Checklist
+
+**CI**
+
+* Linting (ESLint), TypeScript type-check, unit tests, build pipeline.
+* Run Playwright/E2E on PRs.
+
+**CD**
+
+* Frontend: Vercel (Next.js) or Netlify
+* Backend & Workers: Docker images to ECR & deploy to ECS/K8s/Renders
+* Use feature flags for heavy features rollout.
+
+**Deployment checks**
+
+* Run migrations, seed templates, configure S3 & secrets.
+* Set up webhooks for Stripe and monitoring integrations.
+
+---
+
+# 18. Observability & Monitoring
+
+* Error tracking: Sentry
+* Logs: Cloud provider logs or ELK
+* Metrics: Prometheus + Grafana or hosted metrics (Datadog)
+* Alerting on worker queue length, failed jobs, high AI cost, PDF generation job failures.
+
+---
+
+# 19. Admin Tools & Support Flows
+
+* Admin panel to review:
+
+  * Users & projects
+  * Payments & refunds
+  * AI usage & credits
+  * Jobs queue (retry/kill)
+  * Template management
+* Support: In-app support chat or ticketing + knowledge base.
+
+---
+
+# 20. Testing Strategy
+
+* Unit tests for frontend components & backend services (Jest).
+* Integration tests for API endpoints.
+* E2E tests (Playwright) for core flows: signup → create CV → generate AI text → export PDF → pay.
+* Load testing: k6 for PDF generation & AI flows to identify cost & scale issues.
+
+---
+
+# 21. Launch Roadmap (phased)
+
+**Phase 1 (MVP)**: Core CV Maker, Live Preview, PDF export, AI text ops, Stripe integration, AR/EN/FR UI baseline.
+**Phase 2**: More templates, file parsing improvements, LinkedIn export support, cover letters, admin enhancements.
+**Phase 3**: Image AI enhancements, marketplace of templates, team accounts, subscriptions.
+**Phase 4**: Integrations with hiring platforms, enterprise billing, advanced analytics.
+
+---
+
+# 22. Quick-start Dev Commands & Env vars
+
+**Example commands**
+
+* `pnpm install`
+* `pnpm dev` (frontend)
+* `pnpm start:dev` (backend)
+* `pnpm worker`
+* `pnpm test`
+* `pnpm prisma migrate dev`
+* `docker-compose up --build`
+
+**Essential environment variables (.env.example)**
+
+```
+# Database
+DATABASE_URL=postgresql://user:pass@localhost:5432/cvxdb
+
+# Redis
+REDIS_URL=redis://localhost:6379
+
+# S3
+S3_ENDPOINT=http://localhost:9000
+S3_KEY=...
+S3_SECRET=...
+S3_BUCKET=cvx-files
+
+# JWT
+JWT_SECRET=...
+
+# Stripe
+STRIPE_SECRET_KEY=...
+STRIPE_WEBHOOK_SECRET=...
+
+# AI
+OPENAI_API_KEY=...
+
+# App
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+NODE_ENV=development
+```
+
+---
+
+# 23. Appendix & Operational Notes
+
+* **Validation rules:** implement strict regex for emails, phone numbers by country, and document numbers. Use Zod schemas mirrored on backend.
+* **Prompt templates:** centralize prompt templates for AI generation and store versioned into DB for audit.
+* **Edit-count enforcement:** server-side counter stored on `projects` to track how many paid edits/downloads remain.
+* **Localization:** keep translations in separate files per namespace. Avoid embedding translatable strings in code.
+
+---
+
+# 24. Next actions / deliverables I can produce immediately
+
+Pick any and I’ll produce it now:
+
+1. Full `prisma.schema` for core tables (users, projects, files, payments, ai_transactions).
+2. Full Zod schemas & example request/response bodies for `projects` API and CV Maker steps.
+3. ERD diagram (textual SQL DDL or Markdown table).
+4. Terraform skeleton for AWS resources (RDS, S3, ECR, ECS).
+5. README saved to memory (done) and also create as file in repo (I can output file content now).
+
+You previously asked I update my memory with this file — I have stored your preference to start conversations in English and the fact that CVX SAAS is trilingual (Arabic, English, French).
+
+---
+
+If you want, tell me which deliverable from section **24** to create now (for example: “1” for `prisma.schema`). I’ll generate it immediately.
