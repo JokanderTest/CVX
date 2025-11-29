@@ -1,10 +1,13 @@
 // src/auth/auth.service.ts
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, NotFoundException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import { ConfigService } from '@nestjs/config';
+
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
+import { MailService } from '../mail/mail.service';
 
 @Injectable()
 export class AuthService {
@@ -13,6 +16,7 @@ export class AuthService {
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
+    private readonly mailService: MailService,
   ) {}
 
   // validate user credentials, return safe user object (no passwordHash) or null
@@ -48,18 +52,17 @@ export class AuthService {
 
     const accessToken = await this.jwtService.signAsync(accessPayload, {
       secret: this.config.get<string>('JWT_ACCESS_SECRET'),
-      expiresIn: accessExp, // pass number (seconds)
+      expiresIn: accessExp, // number (seconds)
     });
 
     const refreshPayload = { sub: user.id };
     const refreshToken = await this.jwtService.signAsync(refreshPayload, {
       secret: this.config.get<string>('JWT_REFRESH_SECRET'),
-      expiresIn: refreshExp, // pass number (seconds)
+      expiresIn: refreshExp, // number (seconds)
     });
 
     return { accessToken, refreshToken };
   }
-
 
   // store hashed refresh token in DB
   async saveRefreshToken(userId: string | number, refreshToken: string) {
@@ -82,7 +85,55 @@ export class AuthService {
     });
   }
 
+  // Create + persist email verification token (returns the plain token to send by email)
+  async createEmailVerificationToken(userId: string, expiresMinutes = 30): Promise<string> {
+    const tokenPlain = crypto.randomBytes(32).toString('hex');
+    const tokenHash = await bcrypt.hash(tokenPlain, 10);
+    const expiresAt = new Date(Date.now() + expiresMinutes * 60 * 1000);
 
+    await this.prisma.emailVerificationToken.create({
+      data: {
+        tokenHash,
+        userId: typeof userId === 'number' ? String(userId) : userId,
+        expiresAt,
+      },
+    });
+
+    return tokenPlain;
+  }
+
+  // Verify email token and update user status
+  async verifyEmailToken(userId: string, tokenPlain: string): Promise<boolean> {
+    const tokens = await this.prisma.emailVerificationToken.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    });
+
+    if (!tokens.length) {
+      return false;
+    }
+
+    for (const t of tokens) {
+      if (t.expiresAt < new Date()) continue;
+
+      const match = await bcrypt.compare(tokenPlain, t.tokenHash);
+      if (match) {
+        await this.prisma.user.update({
+          where: { id: userId },
+          data: { isEmailVerified: true },
+        });
+
+        await this.prisma.emailVerificationToken.deleteMany({
+          where: { userId },
+        });
+
+        return true;
+      }
+    }
+
+    return false;
+  }
 
   // find valid (not revoked, not expired) token record matching the raw token
   async findValidTokenForUser(userId: string | number, token: string) {
@@ -99,6 +150,37 @@ export class AuthService {
     }
     return null;
   }
+
+  // Send verification email to user (single, clean implementation)
+  async sendVerificationEmail(userId: string, tokenPlain: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true, name: true },
+    });
+
+    if (!user) throw new NotFoundException('User not found');
+
+    const verifyUrl = `${this.config.get('APP_URL')}/auth/verify-email?token=${tokenPlain}&uid=${userId}`;
+
+    const html = `
+      <div style="font-family: Arial; padding:20px;">
+        <h2>تفعيل البريد الإلكتروني</h2>
+        <p>مرحباً ${user.name ?? 'مستخدم'},</p>
+        <p>اضغط على الرابط التالي لتفعيل حسابك:</p>
+        <a href="${verifyUrl}" style="color:blue;">تفعيل الحساب</a>
+        <p>إذا لم تطلب هذا، فتجاهل الرسالة.</p>
+      </div>
+    `;
+
+    await this.mailService.send(
+      user.email,
+      'تفعيل حسابك في CVX',
+      html,
+    );
+
+    return true;
+  }
+
 
   // rotate refresh tokens: create new record and revoke old
   async rotateRefreshToken(oldTokenId: number, userId: string | number, newRefreshToken: string) {
@@ -126,7 +208,6 @@ export class AuthService {
 
     return newToken;
   }
-
 
   async revokeRefreshToken(id: number) {
     return this.prisma.refreshToken.update({

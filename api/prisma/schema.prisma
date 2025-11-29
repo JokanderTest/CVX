@@ -15,23 +15,24 @@ datasource db {
 
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  passwordHash String
-  name         String?
-  locale       String   @default("en")
-  credits      Int      @default(20)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                       String                     @id @default(uuid())
+  email                    String                     @unique
+  passwordHash             String
+  name                     String?
+  locale                   String                     @default("en")
+  credits                  Int                        @default(20)
+  isEmailVerified          Boolean                    @default(false)
+  createdAt                DateTime                   @default(now())
+  updatedAt                DateTime                   @updatedAt
 
   // Relations
-  projects       Project[]
-  payments       Payment[]
-  aiTransactions AITransaction[]
-
-  // NEW:
-  refreshTokens  RefreshToken[]
+  projects                 Project[]
+  payments                 Payment[]
+  aiTransactions           AITransaction[]
+  refreshTokens            RefreshToken[]
+  emailVerificationTokens  EmailVerificationToken[]
 }
+
 
 
 model Project {
@@ -148,3 +149,13 @@ model RefreshToken {
   @@index([userId])
 }
 
+model EmailVerificationToken {
+  id         String   @id @default(cuid())
+  tokenHash  String
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+
+  @@index([userId])
+}
