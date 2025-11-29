@@ -1,0 +1,7 @@
+-- AlterTable
+ALTER TABLE "EmailVerificationToken" ADD COLUMN     "attempts" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "lockedUntil" TIMESTAMP(3),
+ADD COLUMN     "maxAttempts" INTEGER NOT NULL DEFAULT 5,
+ADD COLUMN     "resendCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "type" TEXT NOT NULL DEFAULT 'link',
+ADD COLUMN     "used" BOOLEAN NOT NULL DEFAULT false;

@@ -150,12 +150,20 @@ model RefreshToken {
 }
 
 model EmailVerificationToken {
-  id         String   @id @default(cuid())
-  tokenHash  String
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt  DateTime @default(now())
-  expiresAt  DateTime
+  id          String   @id @default(cuid())
+  tokenHash   String
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  // NEW fields for OTP mode
+  type        String   @default("link") // "link" or "code"
+  attempts    Int      @default(0)      // how many verify attempts used
+  maxAttempts Int      @default(5)
+  resendCount Int      @default(0)
+  lockedUntil DateTime?                      // optional lockout timestamp
+  used        Boolean  @default(false)       // mark consumed tokens
 
   @@index([userId])
 }
