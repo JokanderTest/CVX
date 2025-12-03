@@ -1,26 +1,72 @@
 @import "tailwindcss";
 
+/* === Global Design Tokens for CVX === */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Global colors */
+  --background: #12161f;   /* Main background for all pages */
+  --color-surface: #171b26; /* Background Helper, eg for sidebar, cards, etc ... */
+
+  --foreground: #dddddd;   /* Main text color for all pages */
+  --foreground-hover: #ffffff;
+  --color-primary: #0679c5; /* Primary action color (buttons, links, accents) */
+
+
+  /* Global font */
+  --font-roboto: system-ui;
 }
 
+/* Tailwind theme bridge (so you can use bg-background, text-foreground, bg-primary, etc.) */
 @theme inline {
   --color-background: var(--background);
+  --color-surface: var(--color-surface);
+
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-foreground-hover: var(--foreground-hover);
+
+  --color-primary: var(--color-primary);
+  
+  --font-sans: var(--font-roboto);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Base styles applied to the whole app */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-roboto), system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
+
+/* Optional: make links use the primary color by default */
+a {
+  color: var(--color-primary);
+}
+
+/* Optional: smoother look */
+body {
+  text-rendering: optimizeLegibility;
+}
+
+/* Unified description text style for CV Wizard steps used in make-new-cv pages */
+.cv-wizard-description {
+  @apply text-sm md:text-base text-foreground/80 font-light leading-relaxed;
+}
+
+.cv-filter-heading {
+  @apply text-base font-medium text-foreground/80 mb-1;
+}
+
+.cv-filter-option {
+  @apply flex items-center gap-2 text-base font-extralight text-foreground/70;
+}
+

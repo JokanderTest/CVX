@@ -1,0 +1,8 @@
+المشروع يتكون من:
+- web = Next.js (frontend)
+- api = NestJS + Prisma (backend)
+- DB = PostgreSQL
+كل منطق ال CV Builder يتم داخل: api/src/resume-engine/
+كل API يتم داخل NestJS في api/src
+كل UI في web/src/app
+عند أي ميزة جديدة: نحدد هل تحتاج Backend, Frontend, Prisma أو الثلاثة معًا.

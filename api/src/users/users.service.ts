@@ -22,13 +22,11 @@ export class UsersService {
     });
   }
 
-
   // Create new user
   async createUser(data: {
     email: string;
     password: string;
     name?: string;
-    locale?: string;
   }) {
     const hashedPassword = await bcrypt.hash(data.password, 10);
 
@@ -37,7 +35,6 @@ export class UsersService {
         email: data.email,
         passwordHash: hashedPassword,
         name: data.name,
-        locale: data.locale ?? 'en',
       },
     });
   }

@@ -1,3 +1,5 @@
+//C:\Users\JokanderX\cvx\api\src\auth\strategies\jwt.strategy.ts
+
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
@@ -32,7 +34,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     return { 
       id: payload.sub, 
       email: payload.email, 
-      role: payload.role 
+      role: payload.role,
+      name: payload.name ?? null,
     };
   }
 }

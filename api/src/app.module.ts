@@ -10,6 +10,8 @@ import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
 import { RedisModule } from './common/redis.module';
 
+import { ResumeEngineModule } from "./resume-engine/resume-engine.module";
+
 @Module({
   imports: [
     // ============================================
@@ -21,7 +23,7 @@ import { RedisModule } from './common/redis.module';
     }),
     
     // ============================================
-    // 2. RATE LIMITING (جديد - حماية من DDoS)
+    // 2. RATE LIMITING (حماية من DDoS)
     // ============================================
     ThrottlerModule.forRoot([{
       ttl: 60000, // Time window: 1 minute (in milliseconds)
@@ -29,11 +31,16 @@ import { RedisModule } from './common/redis.module';
     }]),
 
     // ============================================
-    // 3. EXISTING MODULES (بدون تغيير)
+    // 3. EXISTING MODULES
     // ============================================
-    RedisModule,   // Redis للـ CSRF tokens و pending registrations
+    RedisModule,
     UsersModule,
     AuthModule,
+
+    // ============================================
+    // 4. NEW CVX MODULE
+    // ============================================
+    ResumeEngineModule,
   ],
   
   controllers: [AppController],
@@ -41,11 +48,11 @@ import { RedisModule } from './common/redis.module';
     AppService,
     
     // ============================================
-    // 4. GLOBAL GUARDS (جديد)
+    // 5. GLOBAL GUARDS
     // ============================================
     {
       provide: APP_GUARD,
-      useClass: ThrottlerGuard, // Apply rate limiting globally
+      useClass: ThrottlerGuard,
     },
   ],
 })

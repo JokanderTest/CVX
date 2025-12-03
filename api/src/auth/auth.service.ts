@@ -1,5 +1,5 @@
 // src/auth/auth.service.ts - SECURE VERSION
-import { Injectable, UnauthorizedException, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { ConfigService } from '@nestjs/config';
@@ -9,6 +9,8 @@ import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { MailService } from '../mail/mail.service';
+
+import axios from 'axios';
 
 @Injectable()
 export class AuthService {
@@ -56,6 +58,139 @@ export class AuthService {
     // CSRF token expires after 1 hour
     await this.redis.set(key, token, 'EX', 3600);
   }
+  // ============================================
+  // Build Google OAuth URL
+  // ============================================
+  getGoogleAuthURL(origin: 'login' | 'signup' = 'login'): string {
+    const rootUrl = 'https://accounts.google.com/o/oauth2/v2/auth';
+
+    const params: Record<string, string> = {
+      client_id: this.config.get<string>('GOOGLE_CLIENT_ID') || '',
+      redirect_uri: this.config.get<string>('GOOGLE_REDIRECT_URI') || '',
+      response_type: 'code',
+      scope: ['openid', 'email', 'profile'].join(' '),
+      access_type: 'offline',
+      prompt: 'consent',
+      state: origin, // نرسل origin هنا
+    };
+
+    const search = new URLSearchParams(params).toString();
+    return `${rootUrl}?${search}`;
+  }
+
+
+
+
+  // Handle Google callback: exchange code -> tokens, get profile, find/create user, link Account
+  async handleGoogleCallback(code: string, origin: 'login' | 'signup' = 'login') {
+      if (!code) throw new BadRequestException('Code is required');
+
+
+    // 1) Exchange code for tokens
+    const tokenResp = await axios.post(
+      'https://oauth2.googleapis.com/token',
+      new URLSearchParams({
+        code,
+        client_id: this.config.get<string>('GOOGLE_CLIENT_ID') || '',
+        client_secret: this.config.get<string>('GOOGLE_CLIENT_SECRET') || '',
+        redirect_uri: this.config.get<string>('GOOGLE_REDIRECT_URI') || '',
+        grant_type: 'authorization_code',
+      }).toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
+
+    const { access_token, id_token, refresh_token } = tokenResp.data;
+
+    // 2) Get user profile (OpenID Connect userinfo)
+    const profileResp = await axios.get('https://openidconnect.googleapis.com/v1/userinfo', {
+      headers: { Authorization: `Bearer ${access_token}` },
+    });
+
+    const profile = profileResp.data as any; // contains sub, email, email_verified, name, picture, ...
+
+    const provider = 'google';
+    const providerId = String(profile.sub);
+
+    // 3) Try to find existing Account (provider+providerId)
+    let account: any = null;
+    try {
+      account = await (this.prisma as any).account.findUnique({
+        where: { provider_providerId: { provider, providerId } },
+        include: { user: true },
+      });
+    } catch (err) {
+      account = null;
+    }
+
+    // If account exists (Google already linked)
+    if (account && account.user) {
+      const user = account.user;
+
+      // If user clicked **Signup**, but this Google account already has an account
+      if (origin === 'signup') {
+        throw new BadRequestException(
+          'This Google account is already linked. Please sign in instead.'
+        );
+      }
+
+      // If origin === login, or origin missing -> log user in
+      const tokens = await this.getTokens(user);
+      await this.saveRefreshToken(user.id, tokens.refreshToken);
+      return { user, tokens };
+    }
+
+      // 4) No existing Google-linked account → check by email or create new user
+      let user: any = null;
+
+      if (profile.email) {
+        user = await (this.prisma as any).user.findUnique({ where: { email: profile.email } });
+      }
+
+      // If user exists but clicked **Signup**, this means he has an email account already
+      if (user && origin === 'signup') {
+        throw new BadRequestException(
+          'This email is already registered. Please sign in instead.'
+        );
+      }
+
+      // If no user → create new
+      if (!user) {
+        const randomPassword = crypto.randomBytes(24).toString('hex');
+        const passwordHash = await bcrypt.hash(randomPassword, 12);
+
+        user = await (this.prisma as any).user.create({
+          data: {
+            email: profile.email ?? '',
+            name: profile.name ?? null,
+            passwordHash,
+            isEmailVerified: profile.email_verified ?? true,
+          },
+        });
+      }
+
+      // Link Google account (safe create)
+      try {
+        await (this.prisma as any).account.create({
+          data: {
+            provider,
+            providerId,
+            userId: user.id,
+          },
+        });
+      } catch (err) {
+        // ignore if already created
+      }
+
+
+
+    // 5) Issue app tokens and persist refresh token
+    const tokens = await this.getTokens(user);
+    await this.saveRefreshToken(user.id, tokens.refreshToken);
+
+    return { user, tokens, google: { access_token, id_token, refresh_token } };
+  }
+
+  
 
   // ============================================
   // LOGIN RATE LIMITING
@@ -137,6 +272,7 @@ export class AuthService {
       sub: user.id, 
       email: user.email, 
       role: user.role ?? 'user',
+      name: user.name ?? null, 
       // Add fingerprint for additional security
       fp: this.generateFingerprint(user.id)
     };
@@ -460,115 +596,5 @@ export class AuthService {
         csrfToken: tokens.csrfToken
       }
     };
-  }
-
-  // ============================================
-  // EMAIL VERIFICATION (Legacy - for existing users)
-  // ============================================
-  async createEmailVerificationToken(userId: string, expiresMinutes = this.CODE_TTL_MINUTES): Promise<string> {
-    const code = this.genNumericCode(this.CODE_LENGTH);
-    const codeHash = await this.hashPlain(code);
-    const expiresAt = new Date(Date.now() + expiresMinutes * 60 * 1000);
-    const userIdStr = typeof userId === 'number' ? String(userId) : userId;
-
-    const updateResult = await this.prisma.emailVerificationToken.updateMany({
-      where: { userId: userIdStr },
-      data: {
-        tokenHash: codeHash,
-        expiresAt,
-        createdAt: new Date(),
-        attempts: 0,
-        maxAttempts: this.CODE_MAX_ATTEMPTS,
-        resendCount: 1,
-        type: 'code',
-        used: false,
-        lockedUntil: null,
-      } as any,
-    });
-
-    if (updateResult.count === 0) {
-      await this.prisma.emailVerificationToken.create({
-        data: {
-          userId: userIdStr,
-          tokenHash: codeHash,
-          expiresAt,
-          type: 'code',
-          attempts: 0,
-          maxAttempts: this.CODE_MAX_ATTEMPTS,
-          resendCount: 1,
-          used: false,
-        } as any,
-      });
-    }
-
-    return code;
-  }
-
-  async verifyEmailToken(userId: string, tokenPlain: string): Promise<boolean> {
-    const userIdStr = typeof userId === 'number' ? String(userId) : userId;
-    const tokens = await this.prisma.emailVerificationToken.findMany({
-      where: { userId: userIdStr },
-      orderBy: { createdAt: 'desc' },
-      take: 5,
-    });
-
-    if (!tokens.length) return false;
-
-    for (const t of tokens) {
-      if (t.expiresAt < new Date()) continue;
-
-      const lockedUntil = (t as any).lockedUntil as Date | null | undefined;
-      if (lockedUntil && lockedUntil > new Date()) {
-        return false;
-      }
-
-      const match = await this.comparePlain(tokenPlain, t.tokenHash);
-      if (match) {
-        await this.prisma.user.update({
-          where: { id: userIdStr },
-          data: { isEmailVerified: true },
-        });
-
-        await this.prisma.emailVerificationToken.deleteMany({
-          where: { userId: userIdStr },
-        });
-
-        return true;
-      } else {
-        const attempts = ((t as any).attempts ?? 0) + 1;
-        const maxAttempts = (t as any).maxAttempts ?? this.CODE_MAX_ATTEMPTS;
-        const updateData: any = { attempts };
-        
-        if (attempts >= maxAttempts) {
-          updateData.lockedUntil = new Date(Date.now() + this.CODE_LOCK_MINUTES * 60 * 1000);
-        }
-        
-        await this.prisma.emailVerificationToken.update({
-          where: { id: t.id },
-          data: updateData,
-        });
-      }
-    }
-
-    return false;
-  }
-
-  async sendVerificationEmail(userIdOrEmail: string, tokenPlain: string) {
-    const maybeUser = await this.prisma.user.findUnique({
-      where: { id: userIdOrEmail },
-      select: { email: true, name: true },
-    });
-
-    const to = maybeUser?.email ?? userIdOrEmail;
-    if (!to) throw new NotFoundException('User not found');
-
-    await this.mailService.sendVerificationEmail(
-      to, 
-      userIdOrEmail, 
-      tokenPlain, 
-      { expiresMinutes: this.CODE_TTL_MINUTES }
-    );
-
-    return true;
   }
 }

@@ -1,4 +1,4 @@
-// src/auth/auth.controller.ts - SECURE VERSION
+// src/auth/auth.controller.ts - PERSISTENT COOKIES VERSION
 import {
   Controller,
   Post,
@@ -10,7 +10,6 @@ import {
   BadRequestException,
   HttpCode,
   UseGuards,
-  Headers,
   UnauthorizedException,
 } from '@nestjs/common';
 import type { Response, Request } from 'express';
@@ -22,7 +21,6 @@ import { AuthService } from './auth.service';
 import { AuthGuard } from '@nestjs/passport';
 import { EmailVerifiedGuard } from './email-verified.guard';
 import { LoginDto, RegisterStartDto, RegisterVerifyDto, ResendRegisterDto } from './dto/auth.dto';
-
 
 @Controller('auth')
 export class AuthController {
@@ -44,7 +42,7 @@ export class AuthController {
   private getAccessExpSeconds(): number {
     const raw = String(this.config.get('JWT_ACCESS_EXP') ?? '');
     const parsed = parseInt(raw.replace(/\D+$/, ''), 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 900; // 15 minutes default
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 900;
   }
 
   private isProduction(): boolean {
@@ -52,43 +50,54 @@ export class AuthController {
   }
 
   private buildCookieOptions(maxAgeSeconds: number) {
+    const isProd = this.isProduction();
+    
+    // ✅ التعديل الجوهري: حساب تاريخ الانتهاء لضمان الحفظ
+    const expiresDate = new Date(Date.now() + maxAgeSeconds * 1000);
+
     return {
       httpOnly: true,
-      secure: this.isProduction(), // true in production (HTTPS required)
-      sameSite: 'strict' as const, // Better CSRF protection
-      domain: this.isProduction() ? this.config.get('COOKIE_DOMAIN') : 'localhost',
+      secure: isProd, // false on localhost
+      sameSite: 'lax' as const,
+      domain: isProd ? this.config.get('COOKIE_DOMAIN') : undefined,
       path: '/',
       maxAge: maxAgeSeconds * 1000,
+      expires: expiresDate, // ✅ هذا السطر يمنع حذف الكوكي عند غلق المتصفح
     };
   }
 
   private setCookies(res: Response, tokens: { accessToken: string; refreshToken: string; csrfToken: string }) {
     const refreshExpSec = this.getRefreshExpSeconds();
     const accessExpSec = this.getAccessExpSeconds();
+    const isProd = this.isProduction();
 
-    // Set refresh token in HttpOnly cookie
+    // Set refresh token (Persistent - 30 days)
     res.cookie('refresh_token', tokens.refreshToken, this.buildCookieOptions(refreshExpSec));
     
-    // Set access token in HttpOnly cookie (SECURE!)
+    // Set access token (Persistent until expires - 15 mins)
     res.cookie('access_token', tokens.accessToken, this.buildCookieOptions(accessExpSec));
     
-    // Set CSRF token in regular cookie (readable by JS for sending in headers)
+    // Set CSRF token
+    const csrfExpiresDate = new Date(Date.now() + accessExpSec * 1000);
     res.cookie('csrf_token', tokens.csrfToken, {
-      httpOnly: false, // Must be readable by JavaScript
-      secure: this.isProduction(),
-      sameSite: 'strict' as const,
-      domain: this.isProduction() ? this.config.get('COOKIE_DOMAIN') : 'localhost',
+      httpOnly: false,
+      secure: isProd,
+      sameSite: 'lax' as const,
+      domain: isProd ? this.config.get('COOKIE_DOMAIN') : undefined,
       path: '/',
       maxAge: accessExpSec * 1000,
+      expires: csrfExpiresDate, // ✅ إضافة تاريخ الانتهاء هنا أيضاً
     });
   }
 
   private clearAuthCookies(res: Response) {
+    const isProd = this.isProduction();
+    
     const clearOptions = {
       httpOnly: true,
-      secure: this.isProduction(),
-      sameSite: 'strict' as const,
-      domain: this.isProduction() ? this.config.get('COOKIE_DOMAIN') : 'localhost',
+      secure: isProd,
+      sameSite: 'lax' as const,
+      domain: isProd ? this.config.get('COOKIE_DOMAIN') : undefined, 
       path: '/',
     };
 
@@ -110,7 +119,6 @@ export class AuthController {
       throw new UnauthorizedException('CSRF token mismatch');
     }
 
-    // Validate against stored token in Redis
     const isValid = await this.authService.validateCsrfToken(userId, csrfFromHeader);
     if (!isValid) {
       throw new UnauthorizedException('Invalid CSRF token');
@@ -123,7 +131,7 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(200)
-  @Throttle({ default: { limit: 5, ttl: 60000 } }) // 5 attempts per minute
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   async login(@Body() body: LoginDto, @Res({ passthrough: true }) res: Response) {
     const user = await this.authService.validateUser(body.email, body.password);
 
@@ -131,7 +139,6 @@ export class AuthController {
       throw new BadRequestException('Invalid email or password');
     }
 
-    // Check email verification
     if (!user.isEmailVerified) {
       return { 
         ok: false, 
@@ -140,14 +147,11 @@ export class AuthController {
       };
     }
 
-    // Generate tokens
     const tokens = await this.authService.getTokens(user);
     await this.authService.saveRefreshToken(user.id, tokens.refreshToken);
 
-    // Set secure cookies
     this.setCookies(res, tokens);
 
-    // SECURITY: Don't return tokens in response body
     return { 
       ok: true, 
       user: {
@@ -162,7 +166,7 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(200)
-  @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 refreshes per minute
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const cookie = req.cookies['refresh_token'];
     
@@ -190,10 +194,8 @@ export class AuthController {
     const user = await this.authService.getUserSafe(payload.sub);
     const newTokens = await this.authService.getTokens(user);
 
-    // Rotate refresh token
     await this.authService.rotateRefreshToken(tokenRecord.id, user.id, newTokens.refreshToken);
 
-    // Set new cookies
     this.setCookies(res, newTokens);
 
     return { 
@@ -222,7 +224,7 @@ export class AuthController {
           await this.authService.revokeRefreshToken(tokenRecord.id);
         }
       } catch (error) {
-        // Ignore errors during logout
+        // Ignore errors
       }
     }
 
@@ -250,7 +252,7 @@ export class AuthController {
 
   @Post('register-start')
   @HttpCode(200)
-  @Throttle({ default: { limit: 3, ttl: 60000 } }) // 3 registrations per minute
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   async registerStart(@Body() body: RegisterStartDto) {
     const { name, email, password } = body;
     
@@ -258,7 +260,6 @@ export class AuthController {
       throw new BadRequestException('Missing required fields');
     }
 
-    // Basic email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       throw new BadRequestException('Invalid email format');
@@ -295,7 +296,7 @@ export class AuthController {
 
   @Post('resend-register-code')
   @HttpCode(200)
-  @Throttle({ default: { limit: 3, ttl: 300000 } }) // 3 resends per 5 minutes
+  @Throttle({ default: { limit: 3, ttl: 300000 } })
   async resendRegisterCode(@Body() body: ResendRegisterDto) {
     const { email } = body;
     
@@ -306,42 +307,54 @@ export class AuthController {
     return this.authService.resendRegisterCode(email);
   }
 
-  // ============================================
-  // EMAIL VERIFICATION (for existing users)
-  // ============================================
-
-  @UseGuards(AuthGuard('jwt'))
-  @Post('request-email-verification')
-  @Throttle({ default: { limit: 3, ttl: 300000 } })
-  async requestEmailVerification(@Req() req: Request) {
-    const userId = (req as any).user?.id;
-    
-    // Validate CSRF
-    await this.validateCsrf(req, userId);
-
-    const token = await this.authService.createEmailVerificationToken(userId);
-    await this.authService.sendVerificationEmail(userId, token);
-    
-    return { ok: true, message: 'Verification code sent to your email' };
+  @Get('google')
+  redirectToGoogle(
+    @Res() res: Response,
+    @Query('origin') origin = 'login',
+  ) {
+    const url = this.authService.getGoogleAuthURL(origin === 'signup' ? 'signup' : 'login');
+    return res.redirect(url);
   }
 
-  @Post('verify-email')
-  @HttpCode(200)
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
-  async verifyEmail(@Query('token') token: string, @Query('uid') uid: string) {
-    if (!token || !uid) {
-      throw new BadRequestException('Missing token or user ID');
+  @Get('google/callback')
+  async googleCallback(
+    @Query('code') code: string,
+    @Res() res: Response,
+    @Req() req: Request,
+    @Query('state') stateRaw?: string,
+  ) {
+    if (!code) {
+      throw new BadRequestException('Missing code from Google callback');
     }
 
-    const ok = await this.authService.verifyEmailToken(uid, token);
-    
-    if (!ok) {
-      throw new BadRequestException('Invalid or expired verification code');
-    }
+    const state = stateRaw === 'signup' ? 'signup' : 'login';
 
-    return { ok: true, message: 'Email verified successfully' };
+    try {
+      const out = await this.authService.handleGoogleCallback(code, state);
+
+      if (out?.tokens) {
+        this.setCookies(res, {
+          accessToken: out.tokens.accessToken,
+          refreshToken: out.tokens.refreshToken,
+          csrfToken: out.tokens.csrfToken,
+        });
+      }
+
+      const frontend = this.config.get('FRONTEND_URL') || 'http://localhost:3001';
+      return res.redirect(`${frontend}/dashboard`);
+    } catch (err) {
+      console.error('Google callback error:', err);
+      const frontend = this.config.get('FRONTEND_URL') || 'http://localhost:3001';
+
+      if (err instanceof BadRequestException) {
+        const msg = encodeURIComponent((err as any)?.message ?? 'This account already exists. Please sign in.');
+        return res.redirect(`${frontend}/auth/login?notice=already_linked&msg=${msg}`);
+      }
+
+      return res.redirect(`${frontend}/auth/error`);
+    }
   }
-
+ 
   // ============================================
   // PROTECTED ROUTES
   // ============================================
@@ -349,8 +362,6 @@ export class AuthController {
   @UseGuards(AuthGuard('jwt'), EmailVerifiedGuard)
   @Get('test-protected')
   async testProtected(@Req() req: Request) {
-    // Validate CSRF for state-changing operations
-    // For GET requests, CSRF is optional but recommended for sensitive data
     return { 
       ok: true, 
       message: 'Email is verified. Access granted.',
@@ -379,13 +390,17 @@ export class AuthController {
     const csrfToken = this.authService.generateCsrfToken();
     await this.authService.storeCsrfToken(userId, csrfToken);
 
+    // حساب تاريخ انتهاء لـ CSRF لضمان بقائه أيضاً
+    const expiresDate = new Date(Date.now() + 3600000); // ساعة واحدة
+
     res.cookie('csrf_token', csrfToken, {
       httpOnly: false,
       secure: this.isProduction(),
-      sameSite: 'strict' as const,
-      domain: this.isProduction() ? this.config.get('COOKIE_DOMAIN') : 'localhost',
+      sameSite: 'lax' as const,
+      domain: this.isProduction() ? this.config.get('COOKIE_DOMAIN') : undefined,
       path: '/',
-      maxAge: 3600000, // 1 hour
+      maxAge: 3600000,
+      expires: expiresDate, // ✅ إضافة تاريخ الانتهاء
     });
 
     return { ok: true, csrfToken };

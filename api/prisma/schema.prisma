@@ -13,128 +13,30 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-
+////////////////////////////////////////////////////////////////////////////
+//                              User Account                             // 
+///////////////////////////////////////////////////////////////////////////
 model User {
   id                       String                     @id @default(uuid())
+  name                     String?
+
+  language                 String                     @default("en")
+
   email                    String                     @unique
   passwordHash             String
-  name                     String?
-  locale                   String                     @default("en")
-  credits                  Int                        @default(20)
   isEmailVerified          Boolean                    @default(false)
+
   createdAt                DateTime                   @default(now())
   updatedAt                DateTime                   @updatedAt
 
   // Relations
-  projects                 Project[]
-  payments                 Payment[]
-  aiTransactions           AITransaction[]
+  accounts                 Account[]
   refreshTokens            RefreshToken[]
-  emailVerificationTokens  EmailVerificationToken[]
+
+  projectGroups            ProjectGroup[]
+  projects                 Project[]
 }
 
-
-
-model Project {
-  id              String   @id @default(uuid())
-  userId          String
-  title           String
-  language        String
-  templateId      String?
-  dataJson        Json?
-  isPaid          Boolean  @default(false)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  parentProjectId String?
-
-  // Relations
-  user     User             @relation(fields: [userId], references: [id])
-  versions ProjectVersion[]
-  files    File[]
-  payments Payment[]
-}
-
-model ProjectVersion {
-  id        String   @id @default(uuid())
-  projectId String
-  version   Int
-  dataJson  Json?
-  createdAt DateTime @default(now())
-
-  project Project @relation(fields: [projectId], references: [id])
-}
-
-model File {
-  id           String   @id @default(uuid())
-  projectId    String
-  type         String // "pdf" | "docx" | "image"
-  s3Key        String
-  metadataJson Json?
-  createdAt    DateTime @default(now())
-
-  project Project @relation(fields: [projectId], references: [id])
-}
-
-/// Payments and billing
-model Payment {
-  id         String   @id @default(uuid())
-  userId     String
-  projectId  String?
-  amount     Int // stored in smallest currency unit (e.g., cents or millimes)
-  currency   String   @default("TND")
-  gateway    String // "stripe", "local_gateway", ...
-  gatewayRef String? // id from gateway
-  status     String   @default("pending") // pending, succeeded, failed, refunded
-  metadata   Json?
-  createdAt  DateTime @default(now())
-
-  user    User?    @relation(fields: [userId], references: [id])
-  project Project? @relation(fields: [projectId], references: [id])
-}
-
-/// AI credits / transactions log
-model AITransaction {
-  id         String   @id @default(uuid())
-  userId     String
-  type       String // "generate_text","enhance_text","generate_image","enhance_image","translate"
-  cost       Int // credits cost
-  promptHash String? // hash of prompt for caching/audit
-  resultUrl  String? // optional URL to stored result (s3)
-  metadata   Json?
-  createdAt  DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id])
-}
-
-/// Templates (CV templates)
-model Template {
-  id        String   @id @default(uuid())
-  name      String
-  category  String? // e.g., "one-column","two-column","creative"
-  thumbnail String? // s3 key or url
-  html      String? // optional stored HTML template
-  css       String? // optional stored CSS
-  meta      Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-/// Lookup: Countries
-model Country {
-  id      String  @id @default(uuid())
-  code    String  @unique // ISO code e.g., "TN", "US"
-  nameEn  String
-  nameAr  String?
-  flagUrl String?
-}
-
-/// Lookup: Institutions (universities / schools)
-model Institution {
-  id      String  @id @default(uuid())
-  name    String
-  country String? // country code
-  meta    Json?
-}
 
 model RefreshToken {
   id         Int      @id @default(autoincrement())
@@ -149,21 +51,100 @@ model RefreshToken {
   @@index([userId])
 }
 
-model EmailVerificationToken {
-  id          String   @id @default(cuid())
-  tokenHash   String
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt   DateTime @default(now())
-  expiresAt   DateTime
+model Account {
+  id         String   @id @default(uuid())
+  provider   String
+  providerId String
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
 
-  // NEW fields for OTP mode
-  type        String   @default("link") // "link" or "code"
-  attempts    Int      @default(0)      // how many verify attempts used
-  maxAttempts Int      @default(5)
-  resendCount Int      @default(0)
-  lockedUntil DateTime?                      // optional lockout timestamp
-  used        Boolean  @default(false)       // mark consumed tokens
-
+  /// Prevent duplicate provider+providerId entries
+  @@unique([provider, providerId])
   @@index([userId])
+}
+
+
+
+
+
+
+
+////////////////////////////////////////////////////////////////////////////
+//                      CVX ProjectGroups and Project                     //
+////////////////////////////////////////////////////////////////////////////
+
+// Step 1: Source of creation
+enum InitialSource {
+  SCRATCH       // Start from Scratch
+  OLD_PROJECT   // Start from Old Project (CVX)
+  OLD_DOCUMENT  // Start from Old Document (CVX PDF/DOCX)
+  EXTERNAL_CV   // Start from External CV (PDF/DOCX)
+  LINKEDIN      // Start from LinkedIn
+  CALL_AGENT   // Created by a CVX staff member during a call/session
+}
+
+// Template Catalog (independent model)
+model Template {
+  id        String   @id @default(uuid())
+  slug      String   @unique
+  name      String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projects  Project[]
+}
+
+// Multi-language group created from wizard:
+// Example: "CV 1", "CV Ahmed Work"
+model ProjectGroup {
+  id            String        @id @default(uuid())
+
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name          String
+
+  // Sequential index per user: 1, 2, 3...
+  cvIndex       Int
+
+  // Wizard Step 1
+  initialSource InitialSource
+  initialMeta   Json?
+
+  // All language projects inside this group
+  projects      Project[]
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@unique([userId, cvIndex])
+  @@index([userId, createdAt])
+}
+
+// Single CV (one language version)
+model Project {
+  id         String        @id @default(uuid())
+
+  groupId    String
+  group      ProjectGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  userId     String
+  user       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  language   String   // "en", "fr", "ar", ...
+
+  name       String   // "CV 1 – English", "CV Ahmed Work English"
+
+  templateId String?
+  template   Template?     @relation(fields: [templateId], references: [id])
+
+  data       Json
+
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  @@index([groupId, language])
+  @@index([userId, createdAt])
 }
